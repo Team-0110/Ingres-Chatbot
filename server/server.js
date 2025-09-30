@@ -18,7 +18,6 @@ const cors     = require("cors");
 const Database = require("better-sqlite3");
 const fs       = require("fs");
 const path     = require("path");
-const serverless = require("serverless-http");
 
 const PORT = process.env.PORT || 3001;
 
@@ -402,5 +401,4 @@ app.get("/api/district-trend", (req,res)=>{
   } catch(e){ res.status(500).json({ error: String(e?.message||e) }); }
 });
 
-module.exports = app;
-module.exports.handler = serverless(app);
+app.listen(PORT, () => console.log(`API on http://localhost:${PORT}`));
