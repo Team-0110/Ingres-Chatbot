@@ -1,0 +1,29 @@
+# Column mapping registry for INGRES central reports.
+keys:
+  state:
+    - "STATE"
+  district:
+    - "DISTRICT"
+  # Add "BLOCK", "TALUK", "MANDAL" patterns if you ingest block-level files later.
+metrics:
+  recharge_mcm:
+    - header_like: "GROUND WATER RECHARGE"
+      unit: "ham"
+      to: "mcm"
+      factor: 0.01
+  extractable_mcm:
+    - header_like: "ANNUAL EXTRACTABLE GROUND WATER RESOURCE"
+      unit: "ham"
+      to: "mcm"
+      factor: 0.01
+  extraction_mcm:
+    - header_like: "GROUND WATER EXTRACTION FOR ALL USES (HA.M) TOTAL"
+      unit: "ham"
+      to: "mcm"
+      factor: 0.01
+  stage_pct:
+    - header_like: "STAGE OF GROUND WATER EXTRACTION"
+      unit: "%"
+derived:
+  category:
+    rule: "stage_pct<70?Safe:stage_pct<90?Semi-Critical:stage_pct<=100?Critical:'Over-Exploited'"

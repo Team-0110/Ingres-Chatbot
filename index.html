@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>INGRES Chatbot</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+  <style>
+    html, body { height: 100%; }
+    .bubble { animation: pop .18s ease-out; }
+    @keyframes pop { from { transform: scale(.98); opacity:.0 } to { transform: none; opacity:1 } }
+    .answer { white-space: pre-line; }
+    .pulse { animation: pulse 1.8s ease-in-out infinite; }
+    @keyframes pulse { 0%{opacity:.6} 50%{opacity:1} 100%{opacity:.6} }
+    .fade-draw { stroke-dasharray: 1000; stroke-dashoffset: 1000; animation: draw 1.4s ease-out forwards; }
+    @keyframes draw { to { stroke-dashoffset: 0; } }
+    .tooltip { position:absolute; pointer-events:none; background:#0f172a; color:white; font-size:12px; padding:6px 8px; border-radius:8px; box-shadow:0 6px 16px rgba(0,0,0,.25); }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div class="max-w-6xl mx-auto h-dvh flex flex-col">
+    <header class="px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="px-2 py-1 rounded-lg bg-teal-600 text-white text-sm font-semibold">INGRES</div>
+        <h1 class="font-semibold">Groundwater Assistant</h1>
+        <span class="ml-2 text-xs text-slate-500">prototype</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <select id="stateSelect" class="hidden sm:block px-2 py-1.5 rounded-lg border border-slate-300 text-sm"></select>
+        <button id="btnSettings" class="text-slate-500 hover:text-slate-700" title="Settings">⚙️</button>
+      </div>
+    </header>
+
+    <main class="grid grid-cols-1 lg:grid-cols-2 gap-4 px-3 sm:px-4 pb-24 flex-1 overflow-y-auto" id="main">
+      <section id="chat" class="order-2 lg:order-1 overflow-y-auto">
+        <div class="flex gap-3 items-start bubble">
+          <div class="w-9 h-9 rounded-full bg-teal-600 text-white grid place-items-center shrink-0">AI</div>
+          <div class="bg-white border border-slate-200 rounded-2xl px-4 py-3 max-w-[85%] shadow-sm">
+            <p class="leading-relaxed">Hi! I can answer questions about India’s groundwater assessments. Try asking:
+            <br>• Which districts in Gujarat were over-exploited in 2023?
+            <br>• Trend of stage in Pune between 2020 and 2025.
+            <br>• Latest situation in Rajasthan.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="order-1 lg:order-2">
+        <div class="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm">
+          <div class="flex items-center justify-between mb-2">
+            <div>
+              <div class="text-sm text-slate-500">Map</div>
+              <div id="mapTitle" class="font-semibold">—</div>
+            </div>
+            <div class="text-xs text-slate-500" id="mapSource">—</div>
+          </div>
+
+          <div id="mapWrap" class="relative w-full" style="height: 380px;">
+            <svg id="indiaMap" class="w-full h-full"></svg>
+            <div id="tooltip" class="tooltip" style="display:none"></div>
+          </div>
+
+          <!-- Existing stacked bar -->
+          <div class="mt-4">
+            <div class="text-sm text-slate-500 mb-1">Category stack</div>
+            <canvas id="stackedBar" height="160"></canvas>
+          </div>
+
+          <!-- NEW: Pie + Bars -->
+          <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="bg-slate-50 rounded-xl p-3 border border-slate-200">
+              <div class="text-sm text-slate-500 mb-1">Category share</div>
+              <canvas id="catPie" height="200"></canvas>
+            </div>
+            <div class="bg-slate-50 rounded-xl p-3 border border-slate-200">
+              <div class="text-sm text-slate-500 mb-1">Top 10 by stage %</div>
+              <canvas id="topBars" height="200"></canvas>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <form id="composer" class="fixed left-0 right-0 bottom-0 bg-white/80 backdrop-blur border-t border-slate-200">
+      <div class="max-w-6xl mx-auto p-3 flex gap-2">
+        <input id="prompt" class="flex-1 px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-300" placeholder="Ask about a state or district…" autocomplete="off" />
+        <button id="send" class="px-5 py-3 rounded-xl bg-teal-600 text-white hover:bg-teal-700">Send</button>
+      </div>
+    </form>
+
+    <div id="settings" class="hidden fixed right-3 top-14 z-10 bg-white border border-slate-200 rounded-2xl p-3 shadow-lg w-80">
+      <div class="text-sm font-medium mb-2">Settings</div>
+      <label class="text-xs text-slate-500">API Base</label>
+      <input id="apiBase" class="w-full px-3 py-2 rounded-lg border border-slate-300 mb-2" value="http://localhost:3001" />
+      <label class="flex items-center gap-2 text-xs text-slate-600 mb-2">
+        <input id="debugToggle" type="checkbox" class="h-4 w-4"> Include debug
+      </label>
+      <div class="mt-2 flex justify-end"><button id="btnCloseSettings" class="px-3 py-1.5 rounded-lg bg-slate-800 text-white">Close</button></div>
+    </div>
+  </div>
+
+  <!-- templates -->
+  <template id="tpl-user">
+    <div class="flex gap-3 items-start bubble">
+      <div class="w-9 h-9 rounded-full bg-slate-800 text-white grid place-items-center shrink-0">You</div>
+      <div class="bg-teal-50 text-slate-900 rounded-2xl px-4 py-3 max-w-[85%] shadow-sm"></div>
+    </div>
+  </template>
+
+  <template id="tpl-bot">
+    <div class="flex gap-3 items-start bubble">
+      <div class="w-9 h-9 rounded-full bg-teal-600 text-white grid place-items-center shrink-0">AI</div>
+      <div class="bg-white border border-slate-200 rounded-2xl px-4 py-3 max-w-[85%] shadow-sm flex-1">
+        <div class="answer mb-2"></div>
+        <div class="mt-1 hidden kpis grid grid-cols-2 gap-2"></div>
+        <canvas class="mt-3 hidden lineTrend" height="160"></canvas>
+        <div class="mt-2 text-[12px] text-slate-500 hidden source"></div>
+        <details class="mt-2 hidden debug"><summary class="cursor-pointer text-xs text-slate-500">Debug</summary><pre class="p-2 bg-slate-50 text-[11px] overflow-x-auto"></pre></details>
+      </div>
+    </div>
+  </template>
+
+  <template id="tpl-typing">
+    <div class="flex gap-3 items-start bubble">
+      <div class="w-9 h-9 rounded-full bg-teal-600 text-white grid place-items-center shrink-0">AI</div>
+      <div class="bg-white border border-slate-200 rounded-2xl px-4 py-3 max-w-[85%] shadow-sm">
+        <span class="inline-flex gap-1 items-center">
+          <span class="w-2 h-2 bg-slate-300 rounded-full animate-bounce" style="animation-delay:-.2s"></span>
+          <span class="w-2 h-2 bg-slate-300 rounded-full animate-bounce"></span>
+          <span class="w-2 h-2 bg-slate-300 rounded-full animate-bounce" style="animation-delay:.2s"></span>
+        </span>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    const el = (s, r=document) => r.querySelector(s);
+    const chat = el('#chat');
+    const composer = el('#composer');
+    const promptInput = el('#prompt');
+    const apiBaseInput = el('#apiBase');
+    const debugToggle = el('#debugToggle');
+    const settings = el('#settings');
+    const stateSelect = el('#stateSelect');
+    el('#btnSettings').onclick = () => settings.classList.toggle('hidden');
+    el('#btnCloseSettings').onclick = () => settings.classList.add('hidden');
+
+    // ---- Map globals ----
+    const mapSVG = el('#indiaMap');
+    const mapWrap = el('#mapWrap');
+    const tooltip = el('#tooltip');
+
+    const CAT_COLORS = {
+      'Safe':           '#86efac',
+      'Semi-Critical':  '#fde68a',
+      'Critical':       '#fca5a5',
+      'Over-Exploited': '#ef4444',
+      'Unknown':        '#cbd5e1'
+    };
+
+    // CHART handles for cleanup
+    let stackedBarChart = null;
+    let pieChart = null;
+    let barsChart = null;
+
+    // ---- states dropdown from backend ----
+    async function loadStates() {
+      try {
+        const base = apiBaseInput.value.replace(/\/$/, '');
+        const response = await fetch(`${base}/api/states`);
+        const data = await response.json();
+        const states = (data.states || []).sort();
+        stateSelect.innerHTML = states.map(s => `<option value="${s}">${s}</option>`).join('');
+        stateSelect.onchange = () => renderForState(stateSelect.value);
+        if (states.length) renderForState(states[0]);
+      } catch (e) {
+        console.warn('State load failed', e);
+      }
+    }
+
+    function showTooltip(html, x, y) {
+      tooltip.style.display = 'block';
+      tooltip.style.left = (x + 12) + 'px';
+      tooltip.style.top  = (y + 12) + 'px';
+      tooltip.innerHTML  = html;
+    }
+    function hideTooltip(){ tooltip.style.display='none'; }
+
+    // ---- Render grid "map" (fast + simple placeholder) ----
+    async function renderForState(state, year){
+      const base = apiBaseInput.value.replace(/\/$/, '');
+      const res  = await fetch(`${base}/api/state-map?state=${encodeURIComponent(state)}${year?`&year=${year}`:''}`);
+      const { state: s, year: y, rows } = await res.json();
+
+      el('#mapTitle').textContent = `${s} — District categories (${y})`;
+      el('#mapSource').textContent = 'INGRES/CGWB';
+
+      drawMapGrid(rows, s);
+      renderStackedBar(s, y);
+      renderPie(s, y, rows);
+      renderBars(s, y, rows);
+    }
+
+    function drawMapGrid(districts, state){
+      const svg = d3.select(mapSVG);
+      svg.selectAll('*').remove();
+      const { width, height } = mapWrap.getBoundingClientRect();
+
+      const n = districts.length;
+      const cols = Math.ceil(Math.sqrt(n));
+      const rows = Math.ceil(n / cols);
+      const pad = 2;
+      const rectSize = Math.min(width/cols, height/rows) - pad;
+      const xOffset = (width  - cols*(rectSize+pad)) / 2;
+      const yOffset = (height - rows*(rectSize+pad)) / 2;
+
+      const sorted = [...districts].sort((a,b)=> a.district.localeCompare(b.district));
+
+      const g = svg.append('g').attr('transform', `translate(${xOffset}, ${yOffset})`);
+
+      g.selectAll('rect')
+        .data(sorted)
+        .join('rect')
+        .attr('x', (d,i)=> (i%cols)*(rectSize+pad))
+        .attr('y', (d,i)=> Math.floor(i/cols)*(rectSize+pad))
+        .attr('width', rectSize)
+        .attr('height', rectSize)
+        .attr('rx', 4)
+        .attr('fill', d => CAT_COLORS[d.category] || CAT_COLORS['Unknown'])
+        .attr('stroke', '#0f172a')
+        .attr('stroke-width', 0.5)
+        .attr('class','fade-draw')
+        .on('mousemove', (event,d)=>{
+          const html = `<div class='font-semibold'>${d.district}</div>
+                        <div class='text-slate-300 text-[11px]'>${state}</div>
+                        <div class='mt-1'>Category: <b>${d.category || '—'}</b></div>
+                        <div>Stage: <b>${d.stage_pct ?? '—'}%</b></div>`;
+          showTooltip(html, event.clientX, event.clientY);
+        })
+        .on('mouseleave', hideTooltip)
+        .on('click', async (event,d)=>{
+          hideTooltip();
+          const base = apiBaseInput.value.replace(/\/$/, '');
+          const data = await fetch(`${base}/api/district-trend?state=${encodeURIComponent(state)}&district=${encodeURIComponent(d.district)}`).then(r=>r.json());
+          const html = `<div class='font-semibold mb-1'>${d.district}</div><canvas id='mini' width='220' height='120'></canvas>`;
+          showTooltip(html, event.clientX, event.clientY);
+          requestAnimationFrame(()=>{
+            try{
+              const ctx = el('#mini').getContext('2d');
+              new Chart(ctx,{
+                type:'line',
+                data:{ labels:data.rows.map(r=>r.year), datasets:[{ label:'Stage %', data:data.rows.map(r=>r.stage_pct)}]},
+                options:{ plugins:{legend:{display:false}}, elements:{point:{radius:0}},
+                  scales:{ y:{ title:{display:true, text:'%'}}, x:{ title:{display:true, text:'Year'}}}}
+              });
+            }catch(e){}
+          });
+        });
+
+      // legend
+      const legend = svg.append('g').attr('transform', `translate(${width-160}, ${height-110})`);
+      const cats = ['Safe','Semi-Critical','Critical','Over-Exploited'];
+      legend.selectAll('rect').data(cats).join('rect')
+        .attr('x',0).attr('y',(d,i)=>i*22).attr('width',14).attr('height',14).attr('rx',3)
+        .attr('fill', d=>CAT_COLORS[d]);
+      legend.selectAll('text').data(cats).join('text')
+        .attr('x',22).attr('y',(d,i)=>i*22+11).attr('dominant-baseline','middle').attr('font-size',12).text(d=>d);
+      legend.append('text').attr('x',0).attr('y',-8).attr('font-weight',600).attr('font-size',12).text('Category');
+    }
+
+    // ---- Charts ----
+    async function renderStackedBar(state, year){
+      const base = apiBaseInput.value.replace(/\/$/, '');
+      const data = await fetch(`${base}/api/state-cats?state=${encodeURIComponent(state)}${year?`&year=${year}`:''}`).then(r=>r.json());
+      const ctx = el('#stackedBar').getContext('2d');
+      const counts = data.counts || {};
+      const datasets = [
+        { label:'Safe',           data:[counts['Safe']||0],           backgroundColor: CAT_COLORS['Safe'] },
+        { label:'Semi-Critical',  data:[counts['Semi-Critical']||0],  backgroundColor: CAT_COLORS['Semi-Critical'] },
+        { label:'Critical',       data:[counts['Critical']||0],       backgroundColor: CAT_COLORS['Critical'] },
+        { label:'Over-Exploited', data:[counts['Over-Exploited']||0], backgroundColor: CAT_COLORS['Over-Exploited'] },
+      ];
+      if (stackedBarChart) stackedBarChart.destroy();
+      stackedBarChart = new Chart(ctx,{
+        type:'bar',
+        data:{ labels:[state], datasets },
+        options:{ plugins:{ legend:{ position:'bottom' }}, scales:{ x:{ stacked:true }, y:{ stacked:true, title:{ display:true, text:'District count' }}}}
+      });
+    }
+
+    function renderPie(state, year, rows){
+      // compute counts from rows (so it matches the grid)
+      const counts = rows.reduce((acc,r)=>{ const k=r.category||'Unknown'; acc[k]=(acc[k]||0)+1; return acc; },{});
+      const labels = ['Safe','Semi-Critical','Critical','Over-Exploited'];
+      const data   = labels.map(l=>counts[l]||0);
+      const bg     = labels.map(l=>CAT_COLORS[l]);
+
+      const ctx = el('#catPie').getContext('2d');
+      if (pieChart) pieChart.destroy();
+      pieChart = new Chart(ctx,{
+        type:'doughnut',
+        data:{ labels, datasets:[{ data, backgroundColor:bg, borderWidth:0 }] },
+        options:{
+          cutout:'60%',
+          plugins:{ legend:{ position:'bottom' }, tooltip:{ callbacks:{ label:(c)=> `${c.label}: ${c.parsed}` }}}
+        }
+      });
+    }
+
+    function renderBars(state, year, rows){
+      // Top 10 stage% districts
+      const filtered = rows.filter(r => typeof r.stage_pct === 'number');
+      const top = filtered.sort((a,b)=> (b.stage_pct||0)-(a.stage_pct||0)).slice(0,10);
+      const labels = top.map(r=>r.district);
+      const data   = top.map(r=>r.stage_pct);
+      const bg     = top.map(r=>CAT_COLORS[r.category] || CAT_COLORS['Unknown']);
+
+      const ctx = el('#topBars').getContext('2d');
+      if (barsChart) barsChart.destroy();
+      barsChart = new Chart(ctx,{
+        type:'bar',
+        data:{ labels, datasets:[{ label:'Stage %', data, backgroundColor:bg, borderWidth:0 }] },
+        options:{
+          indexAxis:'y',
+          plugins:{ legend:{ display:false },
+            tooltip:{ callbacks:{ label:(c)=> ` ${c.raw}% (${rows.find(r=>r.district===c.label)?.category||'—'})`}} },
+          scales:{ x:{ title:{ display:true, text:'Stage (%)' }}, y:{ ticks:{ autoSkip:false, maxTicksLimit:10 }}}
+        }
+      });
+    }
+
+    // ---- Chat glue (unchanged) ----
+    function addUser(text){ const t = el('#tpl-user').content.cloneNode(true); t.querySelector('div.bg-teal-50').textContent = text; chat.appendChild(t); chat.scrollTop = chat.scrollHeight; }
+    function addTyping(){ const t = el('#tpl-typing').content.cloneNode(true); chat.appendChild(t); chat.scrollTop = chat.scrollHeight; return chat.lastElementChild; }
+
+    function addBot(answer, payload, debug){
+      const frag = el('#tpl-bot').content.cloneNode(true);
+      chat.appendChild(frag);
+      const card = chat.lastElementChild;
+      const answerEl = card.querySelector('.answer');
+      answerEl.textContent = (answer || '').trim();
+
+      if (payload?.kpis){
+        const box = card.querySelector('.kpis'); box.classList.remove('hidden');
+        for (const k of payload.kpis){
+          const div = document.createElement('div');
+          div.className = 'rounded-xl border border-slate-200 p-3';
+          div.innerHTML = `<div class='text-[11px] text-slate-500'>${k.label}</div><div class='text-lg font-semibold'>${k.value}</div>`;
+          box.appendChild(div);
+        }
+      }
+      if (payload?.source){ const s = card.querySelector('.source'); s.textContent = payload.source; s.classList.remove('hidden'); }
+      if (debug){ const det = card.querySelector('.debug'); det.classList.remove('hidden'); det.querySelector('pre').textContent = JSON.stringify(debug, null, 2); }
+
+      const chartData = payload?.chart;
+      if (chartData?.labels && chartData?.values && chartData.labels.length === chartData.values.length && chartData.labels.length > 1) {
+        const canvas = card.querySelector('canvas.lineTrend');
+        if (canvas) {
+          canvas.classList.remove('hidden');
+          requestAnimationFrame(()=>{
+            try{
+              const ctx = canvas.getContext('2d');
+              new Chart(ctx,{
+                type:'line',
+                data:{ labels: chartData.labels, datasets:[{ label: chartData.label || 'Stage %', data: chartData.values }]},
+                options:{ plugins:{ legend:{ display:true }}, scales:{ y:{ title:{ display:true, text: chartData.yLabel || 'Stage (%)' }}, x:{ title:{ display:true, text: chartData.xLabel || 'Year' }}}}
+              });
+            }catch(e){ canvas.classList.add('hidden'); }
+          });
+        }
+      }
+
+      if (payload?.place?.level === 'state' && payload.place.state) {
+        renderForState(payload.place.state, payload.yearUsed?.max);
+        if (stateSelect.options.length) {
+          for (const opt of stateSelect.options) if (opt.value === payload.place.state) { stateSelect.value = opt.value; break; }
+        }
+      }
+
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    async function ask(text){
+      addUser(text);
+      const typing = addTyping();
+      try{
+        const base = apiBaseInput.value.replace(/\/$/, '');
+        const qs = debugToggle.checked ? '?debug=1' : '';
+        const res = await fetch(`${base}/api/answer${qs}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text }) });
+        const isJson = res.headers.get('content-type')?.includes('application/json');
+        if (!res.ok){ const errText = isJson ? JSON.stringify(await res.json()) : await res.text(); throw new Error(errText || `HTTP ${res.status}`); }
+        const data = isJson ? await res.json() : {};
+        typing.remove();
+        addBot(data.answer, data.payload, data.debug);
+      }catch(err){
+        typing.remove();
+        console.error('Frontend error:', err);
+        addBot("Sorry, I couldn’t complete that. Please try a different phrasing or year.", { source: String(err?.message || err) });
+      }
+    }
+
+    composer.addEventListener('submit', (e)=>{ e.preventDefault(); const t = promptInput.value.trim(); if(!t) return; promptInput.value=''; ask(t); });
+
+    loadStates();
+  </script>
+</body>
+</html>
